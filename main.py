@@ -6,53 +6,113 @@ from functions import *
 # from math import sqrt
 # from itertools import tee
 import matplotlib.pyplot as plt
+from arg_parser import parser
+import quantecon as qe
+import warnings
 
-
-def compute_reward(proposer):
-    B_i = config.REWARD
-    rate = config.RATE
-    transfers = B_i*(1-rate)/(len(allNodes))
-    for node in allNodes: 
-        node.W += B_i
-        node.w += transfers
-        if node.nodeId == proposer:
-            reward_basic = B_i*rate
-            node.w += reward_basic
-    return transfers
-
-
-def single_run(round):
-    results = pd.DataFrame(columns=['round', 'nodeId', 'w', 'W', 'parent', 'splits', 'proposer'])
-    proposer = selectProposer()[0]
-    Splitting()
-    compute_reward(proposer)
-    
-    
-    for node in allNodes:
-        new_row = pd.DataFrame({'round': round, 'nodeId':node.nodeId , 'w':node.w, 'W':node.W, 'parent':node.parent, 'splits':node.splits, 'proposer': proposer}, index=[0])
-        results = pd.concat([results, new_row], ignore_index=True)
-        print(f"Round {round} Node Id:{node.nodeId}, stakes:{node.w}, all stakes:{node.W}, Parent:{node.parent}, Splits:{node.splits}  , Proposer:{proposer}")
-
-    return results
+warnings.simplefilter('ignore')
 
 def main():
+
+    args = parser.parse_args()
     
-    w,W = init_w()
-    for i in range(config.MAX_NODES):
-        allNodes.append(Node(i, w[i], W, parent=i, splits=0))
+    data_init, data_rep = init_w()
+    # print(data_init)
+
+    for i in range(args.max_nodes):
+        allNodes.append(Node(i, data_init['w'][i], data_init['W'][i], parent = i, 
+                             sybil = 0, winit = data_init['w'][i], Winit = data_init['W'][i], group = data_init['group'][i], 
+                             gSize = data_init['gSize'][i], gW = data_init['gW'][i], rep = data_init['rep'][i]))
+        
 
     # for node in allNodes:
-    #     print(f"Round {1} Node Id:{node.nodeId}, stakes:{node.w}, all stakes:{node.W}, Parent:{node.parent}, Splits:{node.splits}")
+    #     print(f"Round {1} Node Id:{node.nodeId}, stakes:{node.w}, all stakes:{node.W}, Parent:{node.parent}, Splits:{node.splits} , group: {node.group}, group weight : {node.gW}")
     
-    results = pd.DataFrame(columns=['round', 'nodeId', 'w', 'W', 'parent', 'splits', 'proposer'])
-    for i in range(config.ROUNDS):
-        print(f"----------------------------Round-{i}-----------------------------------------------------")
-        data = single_run(i)
-        results = pd.concat([results, data], ignore_index=True)
-    results.to_csv('data/flatwUt/flat_%25.csv', index=False)
+    # print(f"all nodes: {allNodes}")
+
+    # print(f"print maximum number of rounds: {args.rounds}")
+
+    print(f"total number of nodes: {len(allNodes)}")
+
+    results_main = pd.DataFrame(columns=['round', 'nodeId', 'w', 'W', 'parent', 'splits', 'proposer'])
+    results_gini = pd.DataFrame(columns=['round', 'gini'])
+    results_del= pd.DataFrame(columns=['round', 'nodeId', 'stakes'])
+    
+    expRep = calculate_expected_reputation(data_rep, config.DECAY_RATE)
+
+    # print(f"Expected reputation: {expRep}")
+    
+    print(f"Decay rate: {config.DECAY_RATE}")
+
+    for i in range(args.rounds):
+
+        # for node in allNodes:
+        #     print(f"Round {i} Node Id:{node.nodeId}, stakes:{node.w}, all stakes:{node.W}, Parent:{node.parent}, Splits:{node.sybil} , group: {node.group}, group weight : {node.gW}")
+        
+
+
+
+        print(f"----------------------------Round-{i}-----------------------------------------------------")  
+
+        # for node in allNodes:
+        # # print(f"Round {i} Node Id:{node.nodeId}, stakes:{node.w}, all stakes:{node.W}, Parent:{node.parent}, Splits:{node.sybil} , group: {node.group}, group weight : {node.gW}")
+        #     if node.nodeId == 3171:
+        #         print(f"Round {i} Node Id:{node.nodeId}, stakes:{node.w}, all stakes:{node.W}, Parent:{node.parent}, Splits:{node.sybil} , group: {node.group}, group weight : {node.gW}")
+
+    
+
+        if args.node_count != "fixed":
+            deleteNode(i)
+      
+        if args.splitting == "True":
+            splitting_decision(expRep)
+
+        proposer = selectProposer(data_init)
+
+        print(f"This is the proposer node {proposer}")
+    
+        data_main = single_run(i, proposer, data_rep)
+
+
+        if args.splitting == "True":
+            data_splitting = data_main.groupby(["round","parent"]).agg({'round': 'first', 'nodeId': 'first','w': 'sum', 'W': 'first', 'proposer': 'first'})
+            wealth = data_splitting['w'].to_numpy()
+            # gini = qe.gini_coefficient(wealth) # Gini coefficient
+            gini = calculate_gini(wealth)
+        else: 
+            wealth = data_main['w'].to_numpy()
+            
+            # gini = qe.gini_coefficient(wealth) # Gini coefficient
+            gini = calculate_gini(wealth)
+
+
+        print(f"this is the gini coefficient: {gini}")
+
+        # results from gini
+        new_gini = pd.DataFrame({'round': i, 'gini' : gini}, index=[0])
+        results_gini = pd.concat([results_gini, new_gini], ignore_index=True)
+        
+        # main results
+        results_main = pd.concat([results_main, data_main], ignore_index=True)
+
+
+        
+    if args.splitting == "noSybil":
+        fileDestination1 = "data/results/main_"+str(args.incentives)+"_"+str(args.max_nodes)+"_"+str(args.rounds)+"_"+str(args.reward)+"_"+str(args.node_count)+"_"+str(args.distribution)+"_"+str(args.splitting)
+        fileDestination3 = "data/results/gini_"+str(args.incentives)+"_"+str(args.max_nodes)+"_"+str(args.rounds)+"_"+str(args.reward)+"_"+str(args.node_count)+"_"+str(args.distribution)+"_"+str(args.splitting)
+    else: 
+        fileDestination1 = "data/results/main_"+str(args.incentives)+"_"+str(args.max_nodes)+"_"+str(args.rounds)+"_"+str(args.reward)+"_"+str(args.node_count)+"_"+str(args.distribution)+"_"+str(args.splitting)
+        fileDestination3 = "data/results/gini_"+str(args.incentives)+"_"+str(args.max_nodes)+"_"+str(args.rounds)+"_"+str(args.reward)+"_"+str(args.node_count)+"_"+str(args.distribution)+"_"+str(args.splitting)
+                
+    results_main.to_csv(fileDestination1, index=False)
+    results_gini.to_csv(fileDestination3, index=False)
+    
+
+
+    
     # print(results.head())
-    data = results.groupby(["round","parent"]).agg({'round': 'first', 'nodeId': 'first','w': 'sum', 'W': 'first', 'proposer': 'first'})
-    data.to_csv('data/flatwUt/flat_%25_grouped.csv', index=False)
+    # data = results.groupby(["round","parent"]).agg({'round': 'first', 'nodeId': 'first','w': 'sum', 'W': 'first', 'proposer': 'first'})
+    # data.to_csv('data/flat_%25_grouped.csv', index=False)
 
 
 if __name__ == '__main__':
